@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 from kafka.structs import TopicPartition
 
 import pytest
-from consumer import create_consumer, consume, apply_seek, process_message, consume_with_dlq
+from consumer import create_consumer, consume, apply_seek, process_message, process_message_strict, consume_with_dlq
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,10 @@ def test_apply_seek_from_beginning_calls_seek_to_beginning():
     apply_seek(consumer, from_beginning=True, seek_to=None)
 
     consumer.poll.assert_called_once()
-    consumer.seek_to_beginning.assert_called_once_with(p0, p1)
+    consumer.seek_to_beginning.assert_called_once()
+    # assignment() returns a set so order is non-deterministic — check as a set
+    called_with = set(consumer.seek_to_beginning.call_args[0])
+    assert called_with == {p0, p1}
 
 
 def test_apply_seek_to_calls_seek_per_partition():
@@ -131,6 +134,26 @@ def test_process_message_v2_producer_v1_consumer_compatible():
         "extra_future_field": "ignored",  # unknown fields are safely ignored
     }
     process_message(v2_message)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# process_message_strict — demonstrates schema evolution failure
+# ---------------------------------------------------------------------------
+
+def test_strict_works_on_v2_message():
+    """Strict consumer handles v2 messages correctly — they have all expected fields."""
+    process_message_strict({
+        "index": 0,
+        "msg": "hello-0",
+        "timestamp": "2026-05-22T00:00:00+00:00",
+        "schema_version": 2,
+    })
+
+
+def test_strict_crashes_on_v1_message():
+    """Strict consumer crashes on v1 messages — this is the failure schema evolution prevents."""
+    with pytest.raises(KeyError):
+        process_message_strict({"index": 0, "msg": "hello-0"})  # no timestamp → KeyError
 
 
 # ---------------------------------------------------------------------------

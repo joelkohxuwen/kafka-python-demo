@@ -83,6 +83,26 @@ def process_message(message: dict) -> None:
     )
 
 
+def process_message_strict(message: dict) -> None:
+    """Simulates a developer who wrote consumer code assuming v2 fields always exist.
+
+    This is the WRONG pattern — it uses direct key access instead of .get().
+    Breaks immediately when a v1 message (no 'timestamp') arrives.
+    """
+    if message["index"] % 2 != 0:                 # KeyError if "index" missing
+        raise ValueError(f"Simulated failure for index {message['index']}")
+
+    timestamp = message["timestamp"]               # ← CRASH on v1 messages (KeyError)
+    schema_version = message["schema_version"]     # ← CRASH on v1 messages (KeyError)
+    logger.info(
+        "Processed OK (schema v%d): index=%d msg=%s timestamp=%s",
+        schema_version,
+        message["index"],
+        message["msg"],
+        timestamp,
+    )
+
+
 def consume_with_dlq(
     consumer: KafkaConsumer,
     dlq_producer: KafkaProducer,
@@ -134,13 +154,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable dead letter queue — route failed messages to demo-topic-dlq",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Use strict (broken) schema handling — crashes on v1 messages to demo schema evolution failure.",
+    )
     args = parser.parse_args()
 
     logger.info("Starting consumer in group '%s'", args.group)
     consumer = create_consumer(group_id=args.group)
     try:
         apply_seek(consumer, from_beginning=args.from_beginning, seek_to=args.seek_to)
-        if args.dlq:
+        if args.strict:
+            # Demonstrate schema evolution failure — crashes on v1 messages
+            logger.warning("Running in STRICT mode — will crash on v1 messages!")
+            for msg in consumer:
+                process_message_strict(msg.value)
+        elif args.dlq:
             dlq_producer = KafkaProducer(
                 bootstrap_servers=KAFKA_BROKER,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
