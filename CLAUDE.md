@@ -47,6 +47,7 @@ KafkaProducer(bootstrap_servers=...)                   # missing api_version —
 
 - [ ] `api_version=(2, 5, 0)` present?
 - [ ] Topic passed to `KafkaConsumer` constructor (not via `subscribe()`)?
+- [ ] If multiple consumers/producers are needed simultaneously, are they in the **same process** using threads rather than separate processes? Multiple processes each holding Kafka connections causes fd=-1 even with `api_version` set.
 
 ## Dependencies
 
