@@ -12,6 +12,7 @@ Usage:
 import json
 import logging
 import threading
+import time
 
 from kafka import KafkaConsumer, KafkaProducer
 
@@ -92,9 +93,29 @@ def run_dlq_inspector() -> None:
         consumer.close()
 
 
+def with_retry(fn, name: str, delay: float = 2.0) -> None:
+    """Run fn(), restarting silently on fd=-1 errors (Windows kafka-python-ng bug)."""
+    while True:
+        try:
+            fn()
+            break  # fn exited cleanly (e.g. KeyboardInterrupt propagated)
+        except ValueError as exc:
+            if "Invalid file descriptor" in str(exc):
+                logger.warning("%s: connection reset — reconnecting in %.0fs...", name, delay)
+                time.sleep(delay)
+            else:
+                raise
+
+
 if __name__ == "__main__":
-    main_thread = threading.Thread(target=run_main_consumer, name="main-consumer", daemon=True)
-    dlq_thread  = threading.Thread(target=run_dlq_inspector, name="dlq-inspector",  daemon=True)
+    main_thread = threading.Thread(
+        target=with_retry, args=(run_main_consumer, "main-consumer"),
+        name="main-consumer", daemon=True,
+    )
+    dlq_thread = threading.Thread(
+        target=with_retry, args=(run_dlq_inspector, "dlq-inspector"),
+        name="dlq-inspector", daemon=True,
+    )
 
     main_thread.start()
     dlq_thread.start()
