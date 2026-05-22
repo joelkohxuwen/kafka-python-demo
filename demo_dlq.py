@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 def run_main_consumer() -> None:
-    """Consume demo-topic; route failures to the DLQ."""
+    """Consume demo-topic; route failures to the DLQ.
+
+    The DLQ producer is created lazily on the first failure so the consumer
+    can stabilise its single connection before a second one is opened.
+    """
     consumer = KafkaConsumer(
         TOPIC,
         bootstrap_servers=KAFKA_BROKER,
@@ -36,11 +40,7 @@ def run_main_consumer() -> None:
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),
     )
-    dlq_producer = KafkaProducer(
-        bootstrap_servers=KAFKA_BROKER,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        api_version=(2, 5, 0),
-    )
+    dlq_producer = None  # created on first failure only
     logger.info("Main consumer listening on '%s'...", TOPIC)
     try:
         for message in consumer:
@@ -51,6 +51,13 @@ def run_main_consumer() -> None:
                     "Failed [partition %d | offset %d] — routing to DLQ: %s",
                     message.partition, message.offset, exc,
                 )
+                if dlq_producer is None:
+                    logger.info("Creating DLQ producer...")
+                    dlq_producer = KafkaProducer(
+                        bootstrap_servers=KAFKA_BROKER,
+                        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                        api_version=(2, 5, 0),
+                    )
                 dlq_producer.send(
                     DLQ_TOPIC,
                     value={
@@ -62,8 +69,9 @@ def run_main_consumer() -> None:
                     },
                 )
     finally:
-        dlq_producer.flush()
-        dlq_producer.close()
+        if dlq_producer:
+            dlq_producer.flush()
+            dlq_producer.close()
         consumer.close()
 
 
@@ -118,6 +126,7 @@ if __name__ == "__main__":
     )
 
     main_thread.start()
+    time.sleep(3)  # let main consumer stabilise before opening a second connection
     dlq_thread.start()
 
     try:
