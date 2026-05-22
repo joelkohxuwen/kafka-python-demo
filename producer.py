@@ -16,6 +16,7 @@ def create_producer(broker: str = KAFKA_BROKER) -> KafkaProducer:
         bootstrap_servers=broker,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
         key_serializer=lambda k: k.encode("utf-8") if k else None,
+        api_version=(2, 5, 0),  # Fixes "Invalid file descriptor: -1" on Windows
     )
 
 
