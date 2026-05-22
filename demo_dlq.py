@@ -130,7 +130,10 @@ if __name__ == "__main__":
     dlq_thread.start()
 
     try:
-        main_thread.join()
-        dlq_thread.join()
+        # Join with a timeout so Ctrl+C is never blocked on Windows.
+        # Daemon threads are killed automatically when the main thread exits.
+        while main_thread.is_alive() or dlq_thread.is_alive():
+            main_thread.join(timeout=0.5)
+            dlq_thread.join(timeout=0.5)
     except KeyboardInterrupt:
         logger.info("Shutting down.")

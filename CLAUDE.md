@@ -126,6 +126,22 @@ threading.Thread(target=with_retry, args=(run_consumer, "consumer")).start()
 
 ---
 
+### Rule 7 — Never use `thread.join()` without a timeout on Windows
+
+`thread.join()` with no timeout blocks the Python signal handler, making Ctrl+C
+unresponsive. Always join inside a polling loop with a short timeout instead.
+
+```python
+# CORRECT — Ctrl+C works
+while thread.is_alive():
+    thread.join(timeout=0.5)
+
+# WRONG — Ctrl+C is swallowed on Windows
+thread.join()
+```
+
+---
+
 ### Checklist before adding any new consumer or producer
 
 - [ ] `api_version=(2, 5, 0)` present?
