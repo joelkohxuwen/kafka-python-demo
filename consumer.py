@@ -19,6 +19,7 @@ def create_consumer(
         group_id=group_id,
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
+        api_version=(2, 5, 0),  # Fixes "Invalid file descriptor: -1" on Windows
     )
 
 
