@@ -1,53 +1,142 @@
 # kafka-python-demo — project notes for Claude
 
-## Windows Kafka fix (MUST follow every time)
+## Windows Kafka rules (MUST follow every time)
 
 `kafka-python-ng` has a Windows-specific bug: `ValueError: Invalid file descriptor: -1`.
-It surfaces whenever a new `KafkaConsumer` or `KafkaProducer` is instantiated without
-an explicit API version, because the automatic broker version negotiation opens extra
-internal sockets that fail on Windows.
+It surfaces in several distinct situations, each with its own fix. All rules below were
+discovered through actual failures in this project — do not skip any of them.
 
-### Rules — no exceptions
+---
 
-1. **Every `KafkaConsumer(...)` call must include `api_version=(2, 5, 0)`.**
-2. **Every `KafkaProducer(...)` call must include `api_version=(2, 5, 0)`.**
-3. **Pass the topic to the `KafkaConsumer` constructor directly** — do NOT call
-   `consumer.subscribe([topic])` in a separate step. The two-step path triggers
-   additional socket operations that expose the bug even with `api_version` set.
+### Rule 1 — `api_version=(2, 5, 0)` on EVERY consumer and producer
 
-### Correct pattern
+Without it, the library auto-negotiates the broker API version by opening extra internal
+sockets that fail on Windows.
 
 ```python
-# Consumer
-KafkaConsumer(
-    "my-topic",                          # topic in constructor, not subscribe()
-    bootstrap_servers="localhost:9092",
-    api_version=(2, 5, 0),              # REQUIRED on Windows
-    ...
-)
+# CORRECT
+KafkaConsumer("my-topic", bootstrap_servers=..., api_version=(2, 5, 0), ...)
+KafkaProducer(bootstrap_servers=..., api_version=(2, 5, 0), ...)
 
-# Producer
-KafkaProducer(
-    bootstrap_servers="localhost:9092",
-    api_version=(2, 5, 0),              # REQUIRED on Windows
-    ...
-)
+# WRONG — omitting api_version causes fd=-1
+KafkaProducer(bootstrap_servers=...)
 ```
 
-### Wrong pattern (will cause fd=-1 on Windows)
+This applies to **every** script — producer.py, consumer.py, dlq_consumer.py,
+demo_dlq.py, and any new file added in future.
+
+---
+
+### Rule 2 — Pass topic to `KafkaConsumer` constructor, never via `subscribe()`
+
+A separate `consumer.subscribe([topic])` call triggers extra socket operations that
+cause fd=-1 even when `api_version` is set.
 
 ```python
-consumer = KafkaConsumer(bootstrap_servers=..., ...)  # no topic
-consumer.subscribe(["my-topic"])                       # separate subscribe — DON'T DO THIS
+# CORRECT
+KafkaConsumer("my-topic", bootstrap_servers=..., api_version=(2, 5, 0))
 
-KafkaProducer(bootstrap_servers=...)                   # missing api_version — DON'T DO THIS
+# WRONG — two-step subscribe causes fd=-1 on Windows
+consumer = KafkaConsumer(bootstrap_servers=...)
+consumer.subscribe(["my-topic"])
 ```
 
-### Checklist when adding new consumers or producers
+---
+
+### Rule 3 — Never run multiple Python processes that each hold Kafka connections
+
+Even with `api_version` set, having several processes each open their own Kafka
+connections simultaneously causes fd=-1. Consolidate into **one process using threads**.
+
+```
+# WRONG — 3 processes, each with connections → fd=-1
+Terminal 1: python consumer.py --dlq     # KafkaConsumer + KafkaProducer
+Terminal 2: python dlq_consumer.py       # KafkaConsumer
+Terminal 3: python producer.py           # KafkaProducer
+
+# CORRECT — 2 processes, multi-connection script uses threads internally
+Terminal 1: python demo_dlq.py           # threads share one process
+Terminal 2: python producer.py
+```
+
+---
+
+### Rule 4 — Stagger thread startup when a single process holds multiple connections
+
+Starting two threads simultaneously causes both to race for broker connections at the
+same moment, triggering fd=-1. Add `time.sleep(3)` between thread starts.
+
+```python
+# CORRECT
+main_thread.start()
+time.sleep(3)   # let the first connection stabilise before opening another
+dlq_thread.start()
+
+# WRONG — simultaneous start causes connection race → fd=-1
+main_thread.start()
+dlq_thread.start()
+```
+
+---
+
+### Rule 5 — Create secondary Kafka connections lazily, not at startup
+
+If a script needs a KafkaProducer only conditionally (e.g. a DLQ producer that fires
+on failures), do NOT create it at startup alongside the consumer. Create it on first use.
+Opening two connections at once during initialisation triggers fd=-1.
+
+```python
+# CORRECT — lazy creation
+dlq_producer = None
+for message in consumer:
+    try:
+        process(message)
+    except Exception:
+        if dlq_producer is None:
+            dlq_producer = KafkaProducer(..., api_version=(2, 5, 0))
+        dlq_producer.send(DLQ_TOPIC, ...)
+
+# WRONG — both connections open at startup
+consumer = KafkaConsumer(...)
+dlq_producer = KafkaProducer(...)   # second connection too early → fd=-1
+```
+
+---
+
+### Rule 6 — Wrap long-running threads with a retry loop for fd=-1
+
+Even with all the above rules, fd=-1 can still occur transiently on startup.
+Threads must catch it and retry rather than dying permanently.
+
+```python
+def with_retry(fn, name, delay=2.0):
+    while True:
+        try:
+            fn()
+            break
+        except ValueError as exc:
+            if "Invalid file descriptor" in str(exc):
+                logger.warning("%s: connection reset — retrying in %.0fs...", name, delay)
+                time.sleep(delay)
+            else:
+                raise
+
+threading.Thread(target=with_retry, args=(run_consumer, "consumer")).start()
+```
+
+---
+
+### Checklist before adding any new consumer or producer
 
 - [ ] `api_version=(2, 5, 0)` present?
 - [ ] Topic passed to `KafkaConsumer` constructor (not via `subscribe()`)?
-- [ ] If multiple consumers/producers are needed simultaneously, are they in the **same process** using threads rather than separate processes? Multiple processes each holding Kafka connections causes fd=-1 even with `api_version` set.
+- [ ] Is this a new process, or does it share a process with other connections?
+      If new process: merge into existing process using threads instead.
+- [ ] If multiple threads: is there a `time.sleep(3)` between `.start()` calls?
+- [ ] Is any KafkaProducer created conditionally? If so, is it lazy (created on first use)?
+- [ ] Is the thread wrapped in `with_retry`?
+
+---
 
 ## Dependencies
 
@@ -55,12 +144,31 @@ KafkaProducer(bootstrap_servers=...)                   # missing api_version —
   compatibility (`ModuleNotFoundError: No module named 'kafka.vendor.six.moves'`).
   Do NOT revert to `kafka-python`.
 
+## Project structure
+
+| File | Purpose |
+|---|---|
+| `producer.py` | Sends messages; `--key` for partition keys, `--v2` for schema v2 |
+| `consumer.py` | Reads messages; `--group`, `--from-beginning`, `--seek-to`, `--dlq` |
+| `dlq_consumer.py` | Standalone DLQ reader (run alone, not alongside consumer.py) |
+| `demo_dlq.py` | Combined DLQ demo — runs main consumer + DLQ inspector in one process |
+| `show_partitions.py` | Utility — prints which partition each key hashes to |
+| `config.py` | Broker address, topic names, group ID |
+
 ## Running locally
 
 Requires a Kafka broker at `localhost:9092`. Spin one up with Docker:
 
 ```bash
 docker run -d --name kafka -p 9092:9092 apache/kafka:3.7.0
+```
+
+`demo-topic` needs 2 partitions (run once after broker starts):
+
+```bash
+docker exec kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --create --topic demo-topic --partitions 2 --replication-factor 1
 ```
 
 Tests use mocks and do not need a live broker:
