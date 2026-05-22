@@ -126,7 +126,48 @@ threading.Thread(target=with_retry, args=(run_consumer, "consumer")).start()
 
 ---
 
-### Rule 7 — Never use `thread.join()` without a timeout on Windows
+### Rule 7 — Set short session timeouts so the broker clears stale sessions quickly
+
+After a hard restart (Ctrl+C), the broker holds the old consumer group session until
+`session_timeout_ms` expires. With the default (10s), restarting within that window
+triggers a rebalance on a dead connection → fd=-1 infinite retry loop.
+Set `session_timeout_ms=6000` and `heartbeat_interval_ms=2000` on every consumer.
+
+```python
+KafkaConsumer(
+    "my-topic",
+    bootstrap_servers=...,
+    api_version=(2, 5, 0),
+    session_timeout_ms=6000,    # broker clears stale sessions in 6s
+    heartbeat_interval_ms=2000, # must stay < session_timeout_ms / 3
+)
+```
+
+---
+
+### Rule 8 — Use exponential backoff with a retry cap in `with_retry`
+
+An infinite retry loop (`while True`) will spin forever if the broker is genuinely
+unreachable (e.g. stale session, Docker restart). Use exponential backoff and a
+`max_retries` limit so the thread eventually gives up instead of hammering the broker.
+
+```python
+delay = 2.0
+for attempt in range(1, max_retries + 1):
+    try:
+        fn(); return
+    except ValueError as exc:
+        if "Invalid file descriptor" in str(exc):
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)  # cap at 30s
+        else:
+            raise
+logger.error("Giving up after %d attempts.", max_retries)
+```
+
+---
+
+### Rule 9 — Never use `thread.join()` without a timeout on Windows
 
 `thread.join()` with no timeout blocks the Python signal handler, making Ctrl+C
 unresponsive. Always join inside a polling loop with a short timeout instead.

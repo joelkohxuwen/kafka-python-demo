@@ -39,6 +39,8 @@ def run_main_consumer() -> None:
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),
+        session_timeout_ms=6000,      # broker clears stale sessions in 6s (default 10s)
+        heartbeat_interval_ms=2000,   # must be < session_timeout_ms / 3
     )
     dlq_producer = None  # created on first failure only
     logger.info("Main consumer listening on '%s'...", TOPIC)
@@ -84,6 +86,8 @@ def run_dlq_inspector() -> None:
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),
+        session_timeout_ms=6000,
+        heartbeat_interval_ms=2000,
     )
     logger.info("DLQ inspector watching '%s'...", DLQ_TOPIC)
     try:
@@ -101,18 +105,28 @@ def run_dlq_inspector() -> None:
         consumer.close()
 
 
-def with_retry(fn, name: str, delay: float = 2.0) -> None:
-    """Run fn(), restarting silently on fd=-1 errors (Windows kafka-python-ng bug)."""
-    while True:
+def with_retry(fn, name: str, initial_delay: float = 2.0, max_delay: float = 30.0, max_retries: int = 8) -> None:
+    """Run fn(), restarting on fd=-1 errors with exponential backoff.
+
+    Gives up after max_retries so the thread doesn't spin forever when the
+    broker is genuinely unreachable (e.g. stale session after a hard restart).
+    """
+    delay = initial_delay
+    for attempt in range(1, max_retries + 1):
         try:
             fn()
-            break  # fn exited cleanly (e.g. KeyboardInterrupt propagated)
+            return  # fn exited cleanly
         except ValueError as exc:
             if "Invalid file descriptor" in str(exc):
-                logger.warning("%s: connection reset — reconnecting in %.0fs...", name, delay)
+                logger.warning(
+                    "%s: connection reset (attempt %d/%d) — retrying in %.0fs...",
+                    name, attempt, max_retries, delay,
+                )
                 time.sleep(delay)
+                delay = min(delay * 2, max_delay)  # exponential backoff, capped at max_delay
             else:
                 raise
+    logger.error("%s: giving up after %d attempts.", name, max_retries)
 
 
 if __name__ == "__main__":
