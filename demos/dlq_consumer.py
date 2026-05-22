@@ -1,4 +1,8 @@
 """Dead letter queue consumer — tails demo-topic-dlq and logs failed messages."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # make config importable
+
 from kafka import KafkaConsumer
 import json
 import logging

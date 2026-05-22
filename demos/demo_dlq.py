@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # make config importable
+
 """
 Dead Letter Queue demo — runs main consumer and DLQ inspector in one process.
 

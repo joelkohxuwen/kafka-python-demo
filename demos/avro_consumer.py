@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # make config, schema_registry importable
+
 """Avro consumer — reads schema ID from each message, fetches schema from
 the registry, and deserialises the Avro payload.
 

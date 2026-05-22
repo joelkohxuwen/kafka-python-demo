@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # make config importable
+
 from kafka import KafkaConsumer, KafkaProducer
 import argparse
 import json

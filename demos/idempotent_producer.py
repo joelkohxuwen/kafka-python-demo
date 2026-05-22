@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # make config importable
+
 """Idempotent producer demo — contrasts at-least-once vs exactly-once delivery.
 
 kafka-python-ng does not implement broker-level enable_idempotence, so this

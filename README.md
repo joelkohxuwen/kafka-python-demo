@@ -22,23 +22,9 @@ Built with [`kafka-python-ng`](https://github.com/pdeantoni/kafka-python-ng) (a 
 pip install -r requirements.txt
 ```
 
-**2. Start Kafka with dual listeners** (required for Schema Registry to reach Kafka inside Docker)
+**2. Start Kafka and Schema Registry**
 ```bash
-docker network create kafka-net
-
-docker run -d --name kafka \
-  --network kafka-net \
-  -p 9092:9092 \
-  -e KAFKA_NODE_ID=1 \
-  -e KAFKA_PROCESS_ROLES=broker,controller \
-  -e KAFKA_LISTENERS=PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT_INT://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093 \
-  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT_HOST://localhost:9092,PLAINTEXT_INT://kafka:29092 \
-  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_INT:PLAINTEXT,CONTROLLER:PLAINTEXT \
-  -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093 \
-  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
-  -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INT \
-  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
-  apache/kafka:3.7.0
+docker compose up -d
 ```
 
 **3. Create the demo topic with 2 partitions**
@@ -48,14 +34,9 @@ docker exec kafka /opt/kafka/bin/kafka-topics.sh \
   --create --topic demo-topic --partitions 2 --replication-factor 1
 ```
 
-**4. Start Schema Registry** (only needed for Concept 4)
+To stop the infrastructure:
 ```bash
-docker run -d --name schema-registry \
-  --network kafka-net \
-  -p 8081:8081 \
-  -e SCHEMA_REGISTRY_HOST_NAME=schema-registry \
-  -e SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:29092 \
-  confluentinc/cp-schema-registry:7.6.0
+docker compose down
 ```
 
 ---
@@ -69,19 +50,19 @@ Kafka uses a hash of the message key to decide which partition it lands on. Mess
 **Run in three terminals:**
 ```bash
 # Terminal 1
-python consumer.py --group group-a
+python demos/consumer.py --group group-a
 
 # Terminal 2
-python consumer.py --group group-a
+python demos/consumer.py --group group-a
 
 # Terminal 3 — send messages pinned to two keys
-python producer.py --key user-123
-python producer.py --key order-A
+python demos/producer.py --key user-123
+python demos/producer.py --key order-A
 ```
 
 Watch each key always land on the same partition, and the two consumers split the partitions between them. Run `show_partitions.py` to see the murmur2 hash mapping upfront:
 ```bash
-python show_partitions.py
+python demos/show_partitions.py
 ```
 
 ---
@@ -92,12 +73,12 @@ Kafka retains messages on disk. Consumers track their position (offset) per part
 
 **Replay from the beginning:**
 ```bash
-python consumer.py --from-beginning
+python demos/consumer.py --from-beginning
 ```
 
 **Seek to a specific offset:**
 ```bash
-python consumer.py --seek-to 5
+python demos/consumer.py --seek-to 5
 ```
 
 Two consumer groups reading the same topic maintain completely independent offsets — neither affects the other.
@@ -111,14 +92,14 @@ When a consumer can't process a message (bad data, downstream failure), sending 
 The demo simulates a failure on every odd-indexed message. Failed messages are forwarded to `demo-topic-dlq` with metadata (original topic, partition, offset, error).
 
 ```bash
-python demo_dlq.py
+python demos/demo_dlq.py
 ```
 
 Both the main consumer and DLQ inspector run in a single process (two threads) to avoid the Windows multi-process fd=-1 issue.
 
 In a second terminal, produce some messages to trigger failures:
 ```bash
-python producer.py
+python demos/producer.py
 ```
 
 ---
@@ -137,16 +118,16 @@ Every message carries its schema ID, so the consumer always knows which schema t
 **Run in two terminals:**
 ```bash
 # Terminal 1 — start the consumer
-python avro_consumer.py
+python demos/avro_consumer.py
 
 # Terminal 2 — register v1 and send 5 messages
-python avro_producer.py --schema schemas/demo_message_v1.avsc
+python demos/avro_producer.py --schema schemas/demo_message_v1.avsc
 
 # Terminal 2 — upgrade to v2 (additive fields with defaults — accepted)
-python avro_producer.py --schema schemas/demo_message_v2.avsc
+python demos/avro_producer.py --schema schemas/demo_message_v2.avsc
 
 # Terminal 2 — try a breaking change (int → string on index — rejected)
-python avro_producer.py --schema schemas/demo_message_v2_breaking.avsc
+python demos/avro_producer.py --schema schemas/demo_message_v2_breaking.avsc
 ```
 
 The breaking schema is rejected by the registry before a single message is sent. The consumer handles v1 and v2 messages side-by-side with no code changes.
@@ -168,7 +149,7 @@ In an at-least-once system, a producer retries when it doesn't receive an ack. I
 The solution: stamp every message with a unique `message_id` (UUID) generated before the first send attempt. On retry, re-use the same UUID. The consumer tracks a set of seen IDs and skips any message whose ID has already been processed.
 
 ```bash
-python idempotent_producer.py
+python demos/idempotent_producer.py
 ```
 
 The script runs two phases automatically:
@@ -187,18 +168,30 @@ SUMMARY
 
 ## File structure
 
-| File | Purpose |
-|---|---|
-| `producer.py` | Sends messages; `--key` for partition keys, `--v2` for schema v2 |
-| `consumer.py` | Reads messages; `--group`, `--from-beginning`, `--seek-to`, `--dlq` |
-| `demo_dlq.py` | DLQ demo — main consumer + DLQ inspector in one process (two threads) |
-| `dlq_consumer.py` | Standalone DLQ reader |
-| `avro_producer.py` | Avro producer with Schema Registry integration |
-| `avro_consumer.py` | Avro consumer — reads schema ID from each message, fetches schema |
-| `schema_registry.py` | Thin REST client for Confluent Schema Registry |
-| `idempotent_producer.py` | Idempotent producer demo — at-least-once vs exactly-once |
-| `show_partitions.py` | Utility — prints which partition each key hashes to |
-| `config.py` | Broker address, topic names, consumer group ID |
+```
+kafka-python-demo/
+├── config.py                        # shared broker/topic settings
+├── schema_registry.py               # shared Schema Registry REST client
+├── docker-compose.yml               # Kafka + Schema Registry infrastructure
+├── requirements.txt
+├── schemas/
+│   ├── demo_message_v1.avsc         # base Avro schema
+│   ├── demo_message_v2.avsc         # backward-compatible evolution
+│   └── demo_message_v2_breaking.avsc  # intentionally incompatible (demo)
+├── demos/
+│   ├── producer.py                  # sends messages; --key, --v2
+│   ├── consumer.py                  # reads messages; --from-beginning, --seek-to, --dlq
+│   ├── demo_dlq.py                  # DLQ demo — consumer + inspector in one process
+│   ├── dlq_consumer.py              # standalone DLQ reader
+│   ├── avro_producer.py             # Avro producer with Schema Registry
+│   ├── avro_consumer.py             # Avro consumer — schema resolved from message ID
+│   ├── idempotent_producer.py       # at-least-once vs exactly-once demo
+│   └── show_partitions.py           # utility — prints key → partition mapping
+└── tests/
+    ├── test_producer.py
+    ├── test_consumer.py
+    └── test_idempotent_producer.py
+```
 
 ---
 

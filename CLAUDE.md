@@ -205,16 +205,17 @@ thread.join()
 
 | File | Purpose |
 |---|---|
-| `producer.py` | Sends messages; `--key` for partition keys, `--v2` for schema v2 |
-| `consumer.py` | Reads messages; `--group`, `--from-beginning`, `--seek-to`, `--dlq` |
-| `dlq_consumer.py` | Standalone DLQ reader (run alone, not alongside consumer.py) |
-| `demo_dlq.py` | Combined DLQ demo — runs main consumer + DLQ inspector in one process |
-| `show_partitions.py` | Utility — prints which partition each key hashes to |
-| `avro_producer.py` | Avro producer with Confluent wire format + Schema Registry |
-| `avro_consumer.py` | Avro consumer — reads schema ID from each message, fetches schema |
-| `schema_registry.py` | Thin REST client for Confluent Schema Registry |
-| `idempotent_producer.py` | Idempotent producer demo — shows at-least-once vs exactly-once |
 | `config.py` | Broker address, topic names, group ID |
+| `schema_registry.py` | Thin REST client for Confluent Schema Registry |
+| `docker-compose.yml` | Kafka + Schema Registry infrastructure (one command) |
+| `demos/producer.py` | Sends messages; `--key` for partition keys, `--v2` for schema v2 |
+| `demos/consumer.py` | Reads messages; `--group`, `--from-beginning`, `--seek-to`, `--dlq` |
+| `demos/dlq_consumer.py` | Standalone DLQ reader (run alone, not alongside consumer.py) |
+| `demos/demo_dlq.py` | Combined DLQ demo — runs main consumer + DLQ inspector in one process |
+| `demos/show_partitions.py` | Utility — prints which partition each key hashes to |
+| `demos/avro_producer.py` | Avro producer with Confluent wire format + Schema Registry |
+| `demos/avro_consumer.py` | Avro consumer — reads schema ID from each message, fetches schema |
+| `demos/idempotent_producer.py` | Idempotent producer demo — shows at-least-once vs exactly-once |
 
 ## Running locally
 
