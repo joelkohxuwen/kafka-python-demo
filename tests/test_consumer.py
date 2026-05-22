@@ -106,6 +106,33 @@ def test_process_message_raises_for_odd_index():
         process_message({"index": 1, "msg": "hello-1"})
 
 
+def test_process_message_handles_v1_schema():
+    """v1 messages (no timestamp/schema_version) must not raise."""
+    process_message({"index": 0, "msg": "hello-0"})
+
+
+def test_process_message_handles_v2_schema():
+    """v2 messages with extra fields must be processed correctly."""
+    process_message({
+        "index": 0,
+        "msg": "hello-0",
+        "timestamp": "2026-05-22T00:00:00+00:00",
+        "schema_version": 2,
+    })
+
+
+def test_process_message_v2_producer_v1_consumer_compatible():
+    """A v1 consumer receiving a v2 message must not crash (forward compat)."""
+    v2_message = {
+        "index": 2,
+        "msg": "hello-2",
+        "timestamp": "2026-05-22T00:00:00+00:00",
+        "schema_version": 2,
+        "extra_future_field": "ignored",  # unknown fields are safely ignored
+    }
+    process_message(v2_message)  # should not raise
+
+
 # ---------------------------------------------------------------------------
 # consume_with_dlq
 # ---------------------------------------------------------------------------

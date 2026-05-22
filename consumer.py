@@ -61,10 +61,26 @@ def consume(consumer: KafkaConsumer) -> None:
 
 
 def process_message(message: dict) -> None:
-    """Business logic. Raises ValueError for odd-index messages (simulated failure)."""
+    """Business logic — handles both v1 and v2 message schemas.
+
+    v1: {"index": int, "msg": str}
+    v2: {"index": int, "msg": str, "timestamp": str, "schema_version": int}
+
+    New optional fields are read with .get() and a safe default so a v1
+    consumer is never broken by a v2 producer, and vice versa.
+    """
     if message.get("index", 0) % 2 != 0:
         raise ValueError(f"Simulated failure for index {message['index']}")
-    logger.info("Processed OK: %s", message)
+
+    schema_version = message.get("schema_version", 1)  # default to v1 if absent
+    timestamp = message.get("timestamp", "n/a")        # safe default for v1 messages
+    logger.info(
+        "Processed OK (schema v%d): index=%d msg=%s timestamp=%s",
+        schema_version,
+        message.get("index"),
+        message.get("msg"),
+        timestamp,
+    )
 
 
 def consume_with_dlq(

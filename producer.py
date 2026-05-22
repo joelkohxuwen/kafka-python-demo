@@ -3,6 +3,7 @@ from kafka.errors import KafkaError
 import argparse
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from config import KAFKA_BROKER, TOPIC
@@ -46,12 +47,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--key", default=None, help="Partition key (e.g. user-123). Omit for round-robin."
     )
+    parser.add_argument(
+        "--v2", action="store_true",
+        help="Send v2 schema messages with an added 'timestamp' field.",
+    )
     args = parser.parse_args()
 
     producer = create_producer()
     try:
         for i in range(5):
-            send_message(producer, TOPIC, {"index": i, "msg": f"hello-{i}"}, key=args.key)
+            message = {"index": i, "msg": f"hello-{i}"}
+            if args.v2:
+                message["timestamp"] = datetime.now(timezone.utc).isoformat()
+                message["schema_version"] = 2
+            send_message(producer, TOPIC, message, key=args.key)
     finally:
         producer.flush()
         producer.close()
