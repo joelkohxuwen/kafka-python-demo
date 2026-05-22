@@ -1,9 +1,8 @@
 from kafka import KafkaConsumer
-from kafka import ConsumerRebalanceListener
 import argparse
 import json
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from config import KAFKA_BROKER, TOPIC, GROUP_ID
 
@@ -11,37 +10,43 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class SeekListener(ConsumerRebalanceListener):
-    """Runs a seek callback immediately after partitions are assigned."""
-
-    def __init__(self, consumer: KafkaConsumer, on_assign: Optional[Callable]):
-        self._consumer = consumer
-        self._on_assign = on_assign
-
-    def on_partitions_assigned(self, assigned):
-        if self._on_assign:
-            self._on_assign(self._consumer, assigned)
-
-    def on_partitions_revoked(self, revoked):
-        pass  # nothing to do on revoke
-
-
 def create_consumer(
     topic: str = TOPIC,
     broker: str = KAFKA_BROKER,
     group_id: str = GROUP_ID,
-    on_assign: Optional[Callable] = None,
 ) -> KafkaConsumer:
-    consumer = KafkaConsumer(
+    # Topic passed to constructor — avoids the extra subscribe() socket
+    # operations that trigger "Invalid file descriptor: -1" on Windows.
+    return KafkaConsumer(
+        topic,
         bootstrap_servers=broker,
         group_id=group_id,
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),  # Fixes "Invalid file descriptor: -1" on Windows
     )
-    listener = SeekListener(consumer, on_assign) if on_assign else None
-    consumer.subscribe([topic], listener=listener)
-    return consumer
+
+
+def apply_seek(consumer: KafkaConsumer, from_beginning: bool, seek_to: Optional[int]) -> None:
+    """Poll once to trigger partition assignment, then seek as requested."""
+    if not from_beginning and seek_to is None:
+        return
+
+    # Poll with a timeout so the broker assigns partitions to this consumer.
+    consumer.poll(timeout_ms=5000)
+    assigned = consumer.assignment()
+
+    if not assigned:
+        logger.warning("No partitions assigned yet — seek skipped.")
+        return
+
+    if from_beginning:
+        logger.info("Seeking to beginning on %d partition(s)", len(assigned))
+        consumer.seek_to_beginning(*assigned)
+    elif seek_to is not None:
+        logger.info("Seeking to offset %d on %d partition(s)", seek_to, len(assigned))
+        for tp in assigned:
+            consumer.seek(tp, seek_to)
 
 
 def consume(consumer: KafkaConsumer) -> None:
@@ -74,20 +79,10 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    def on_assign(consumer, partitions):
-        if args.from_beginning:
-            logger.info("Seeking to beginning on %d partition(s)", len(partitions))
-            consumer.seek_to_beginning(*partitions)
-        elif args.seek_to is not None:
-            logger.info(
-                "Seeking to offset %d on %d partition(s)", args.seek_to, len(partitions)
-            )
-            for tp in partitions:
-                consumer.seek(tp, args.seek_to)
-
     logger.info("Starting consumer in group '%s'", args.group)
-    consumer = create_consumer(group_id=args.group, on_assign=on_assign)
+    consumer = create_consumer(group_id=args.group)
     try:
+        apply_seek(consumer, from_beginning=args.from_beginning, seek_to=args.seek_to)
         consume(consumer)
     except KeyboardInterrupt:
         logger.info("Shutting down consumer.")

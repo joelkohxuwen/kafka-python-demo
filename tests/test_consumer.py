@@ -1,7 +1,7 @@
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 from kafka.structs import TopicPartition
 
-from consumer import create_consumer, consume
+from consumer import create_consumer, consume, apply_seek
 
 
 # ---------------------------------------------------------------------------
@@ -9,12 +9,10 @@ from consumer import create_consumer, consume
 # ---------------------------------------------------------------------------
 
 @patch("consumer.KafkaConsumer")
-def test_create_consumer_subscribes_to_topic(mock_klass):
+def test_create_consumer_uses_correct_topic(mock_klass):
     create_consumer(topic="my-topic", broker="broker:9092", group_id="grp")
-    instance = mock_klass.return_value
-    instance.subscribe.assert_called_once()
-    args, _ = instance.subscribe.call_args
-    assert args[0] == ["my-topic"]
+    args, _ = mock_klass.call_args
+    assert args[0] == "my-topic"
 
 
 @patch("consumer.KafkaConsumer")
@@ -31,56 +29,56 @@ def test_create_consumer_resets_to_earliest(mock_klass):
     assert kwargs["auto_offset_reset"] == "earliest"
 
 
-@patch("consumer.KafkaConsumer")
-def test_create_consumer_passes_listener_when_on_assign_given(mock_klass):
-    callback = MagicMock()
-    create_consumer(topic="t", broker="b:9092", group_id="g", on_assign=callback)
-    instance = mock_klass.return_value
-    _, kwargs = instance.subscribe.call_args
-    # A SeekListener wrapping the callback should be passed as listener=
-    assert kwargs["listener"] is not None
-
-
-@patch("consumer.KafkaConsumer")
-def test_create_consumer_no_listener_when_no_on_assign(mock_klass):
-    create_consumer(topic="t", broker="b:9092", group_id="g")
-    instance = mock_klass.return_value
-    _, kwargs = instance.subscribe.call_args
-    assert kwargs["listener"] is None
-
-
 # ---------------------------------------------------------------------------
-# on_assign seek behaviour
+# apply_seek
 # ---------------------------------------------------------------------------
 
-def test_on_assign_from_beginning_seeks_to_start():
-    """SeekListener.on_partitions_assigned calls seek_to_beginning."""
-    from consumer import SeekListener
-    partitions = [TopicPartition("demo-topic", 0), TopicPartition("demo-topic", 1)]
+def _make_consumer_with_partitions(*partitions):
+    """Return a mock consumer that reports the given assigned partitions."""
     consumer = MagicMock()
-
-    def on_assign(c, parts):
-        c.seek_to_beginning(*parts)
-
-    listener = SeekListener(consumer, on_assign)
-    listener.on_partitions_assigned(partitions)
-    consumer.seek_to_beginning.assert_called_once_with(*partitions)
+    consumer.poll.return_value = {}
+    consumer.assignment.return_value = set(partitions)
+    return consumer
 
 
-def test_on_assign_seek_to_calls_seek_per_partition():
-    """consumer.seek is called once per partition with the target offset."""
-    partitions = [TopicPartition("demo-topic", 0), TopicPartition("demo-topic", 1)]
+def test_apply_seek_no_op_when_neither_flag_set():
     consumer = MagicMock()
-    target_offset = 3
+    apply_seek(consumer, from_beginning=False, seek_to=None)
+    consumer.poll.assert_not_called()
 
-    def seek_to_on_assign(c, parts):
-        for tp in parts:
-            c.seek(tp, target_offset)
 
-    seek_to_on_assign(consumer, partitions)
-    assert consumer.seek.call_count == len(partitions)
-    consumer.seek.assert_any_call(TopicPartition("demo-topic", 0), target_offset)
-    consumer.seek.assert_any_call(TopicPartition("demo-topic", 1), target_offset)
+def test_apply_seek_from_beginning_calls_seek_to_beginning():
+    p0 = TopicPartition("demo-topic", 0)
+    p1 = TopicPartition("demo-topic", 1)
+    consumer = _make_consumer_with_partitions(p0, p1)
+
+    apply_seek(consumer, from_beginning=True, seek_to=None)
+
+    consumer.poll.assert_called_once()
+    consumer.seek_to_beginning.assert_called_once_with(p0, p1)
+
+
+def test_apply_seek_to_calls_seek_per_partition():
+    p0 = TopicPartition("demo-topic", 0)
+    p1 = TopicPartition("demo-topic", 1)
+    consumer = _make_consumer_with_partitions(p0, p1)
+
+    apply_seek(consumer, from_beginning=False, seek_to=3)
+
+    consumer.poll.assert_called_once()
+    assert consumer.seek.call_count == 2
+    consumer.seek.assert_any_call(p0, 3)
+    consumer.seek.assert_any_call(p1, 3)
+
+
+def test_apply_seek_warns_when_no_partitions_assigned():
+    consumer = MagicMock()
+    consumer.poll.return_value = {}
+    consumer.assignment.return_value = set()  # nothing assigned yet
+
+    # Should not raise, just log a warning
+    apply_seek(consumer, from_beginning=True, seek_to=None)
+    consumer.seek_to_beginning.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
