@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "DemoMessage",
+  "namespace": "com.demo",
+  "doc": "INTENTIONALLY INCOMPATIBLE — changes index from int to string. Registry will reject this.",
+  "fields": [
+    {"name": "index", "type": "string", "doc": "BREAKING: was int, now string"},
+    {"name": "msg",   "type": "string", "doc": "human-readable label"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "DemoMessage",
+  "namespace": "com.demo",
+  "doc": "v1 — original message shape",
+  "fields": [
+    {"name": "index", "type": "int",    "doc": "message sequence number"},
+    {"name": "msg",   "type": "string", "doc": "human-readable label"}
+  ]
+}

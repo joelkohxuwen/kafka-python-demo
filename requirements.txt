@@ -1,2 +1,4 @@
 kafka-python-ng==2.2.3
 pytest==8.2.0
+fastavro==1.9.4
+requests==2.32.3

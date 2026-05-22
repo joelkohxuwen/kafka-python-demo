@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "DemoMessage",
+  "namespace": "com.demo",
+  "doc": "v2 — adds optional timestamp and schema_version (backward compatible)",
+  "fields": [
+    {"name": "index",          "type": "int",              "doc": "message sequence number"},
+    {"name": "msg",            "type": "string",           "doc": "human-readable label"},
+    {"name": "timestamp",      "type": ["null", "string"], "default": null, "doc": "ISO-8601 UTC timestamp, null for v1 messages"},
+    {"name": "schema_version", "type": "int",              "default": 1,    "doc": "schema version used by the producer"}
+  ]
+}
