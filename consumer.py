@@ -1,4 +1,5 @@
 from kafka import KafkaConsumer
+import argparse
 import json
 import logging
 
@@ -35,7 +36,14 @@ def consume(consumer: KafkaConsumer) -> None:
 
 
 if __name__ == "__main__":
-    consumer = create_consumer()
+    parser = argparse.ArgumentParser(description="Kafka consumer")
+    parser.add_argument(
+        "--group", default=GROUP_ID, help="Consumer group ID (default: %(default)s)"
+    )
+    args = parser.parse_args()
+
+    logger.info("Starting consumer in group '%s'", args.group)
+    consumer = create_consumer(group_id=args.group)
     try:
         consume(consumer)
     except KeyboardInterrupt:
