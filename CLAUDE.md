@@ -210,6 +210,10 @@ thread.join()
 | `dlq_consumer.py` | Standalone DLQ reader (run alone, not alongside consumer.py) |
 | `demo_dlq.py` | Combined DLQ demo — runs main consumer + DLQ inspector in one process |
 | `show_partitions.py` | Utility — prints which partition each key hashes to |
+| `avro_producer.py` | Avro producer with Confluent wire format + Schema Registry |
+| `avro_consumer.py` | Avro consumer — reads schema ID from each message, fetches schema |
+| `schema_registry.py` | Thin REST client for Confluent Schema Registry |
+| `idempotent_producer.py` | Idempotent producer demo — shows at-least-once vs exactly-once |
 | `config.py` | Broker address, topic names, group ID |
 
 ## Running locally
