@@ -1,4 +1,5 @@
 from kafka import KafkaConsumer
+from kafka import ConsumerRebalanceListener
 import argparse
 import json
 import logging
@@ -8,6 +9,21 @@ from config import KAFKA_BROKER, TOPIC, GROUP_ID
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class SeekListener(ConsumerRebalanceListener):
+    """Runs a seek callback immediately after partitions are assigned."""
+
+    def __init__(self, consumer: KafkaConsumer, on_assign: Optional[Callable]):
+        self._consumer = consumer
+        self._on_assign = on_assign
+
+    def on_partitions_assigned(self, assigned):
+        if self._on_assign:
+            self._on_assign(self._consumer, assigned)
+
+    def on_partitions_revoked(self, revoked):
+        pass  # nothing to do on revoke
 
 
 def create_consumer(
@@ -23,7 +39,8 @@ def create_consumer(
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),  # Fixes "Invalid file descriptor: -1" on Windows
     )
-    consumer.subscribe([topic], on_assign=on_assign)
+    listener = SeekListener(consumer, on_assign) if on_assign else None
+    consumer.subscribe([topic], listener=listener)
     return consumer
 
 
