@@ -1,7 +1,8 @@
 from unittest.mock import MagicMock, patch
 from kafka.structs import TopicPartition
 
-from consumer import create_consumer, consume, apply_seek
+import pytest
+from consumer import create_consumer, consume, apply_seek, process_message, consume_with_dlq
 
 
 # ---------------------------------------------------------------------------
@@ -89,3 +90,53 @@ def test_consume_processes_all_messages():
     msg1 = MagicMock(partition=0, offset=0, value={"index": 0})
     msg2 = MagicMock(partition=0, offset=1, value={"index": 1})
     consume([msg1, msg2])
+
+
+# ---------------------------------------------------------------------------
+# process_message
+# ---------------------------------------------------------------------------
+
+def test_process_message_succeeds_for_even_index():
+    process_message({"index": 0, "msg": "hello-0"})
+    process_message({"index": 2, "msg": "hello-2"})
+
+
+def test_process_message_raises_for_odd_index():
+    with pytest.raises(ValueError, match="Simulated failure for index 1"):
+        process_message({"index": 1, "msg": "hello-1"})
+
+
+# ---------------------------------------------------------------------------
+# consume_with_dlq
+# ---------------------------------------------------------------------------
+
+def _make_message(index, partition=0, offset=0, topic="demo-topic"):
+    msg = MagicMock()
+    msg.value = {"index": index, "msg": f"hello-{index}"}
+    msg.topic = topic
+    msg.partition = partition
+    msg.offset = offset
+    return msg
+
+
+def test_consume_with_dlq_routes_failures_to_dlq():
+    good = _make_message(0)   # even → processed OK
+    bad  = _make_message(1)   # odd  → routed to DLQ
+
+    dlq_producer = MagicMock()
+    consume_with_dlq([good, bad], dlq_producer, dlq_topic="test-dlq")
+
+    dlq_producer.send.assert_called_once()
+    _, kwargs = dlq_producer.send.call_args
+    assert kwargs["value"]["original_offset"] == bad.offset
+    assert "Simulated failure" in kwargs["value"]["error"]
+
+
+def test_consume_with_dlq_does_not_send_good_messages_to_dlq():
+    good1 = _make_message(0)
+    good2 = _make_message(2)
+
+    dlq_producer = MagicMock()
+    consume_with_dlq([good1, good2], dlq_producer, dlq_topic="test-dlq")
+
+    dlq_producer.send.assert_not_called()

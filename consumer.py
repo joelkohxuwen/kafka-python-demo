@@ -1,10 +1,10 @@
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, KafkaProducer
 import argparse
 import json
 import logging
 from typing import Optional
 
-from config import KAFKA_BROKER, TOPIC, GROUP_ID
+from config import KAFKA_BROKER, TOPIC, DLQ_TOPIC, GROUP_ID
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -60,6 +60,42 @@ def consume(consumer: KafkaConsumer) -> None:
         )
 
 
+def process_message(message: dict) -> None:
+    """Business logic. Raises ValueError for odd-index messages (simulated failure)."""
+    if message.get("index", 0) % 2 != 0:
+        raise ValueError(f"Simulated failure for index {message['index']}")
+    logger.info("Processed OK: %s", message)
+
+
+def consume_with_dlq(
+    consumer: KafkaConsumer,
+    dlq_producer: KafkaProducer,
+    dlq_topic: str = DLQ_TOPIC,
+) -> None:
+    """Consume messages and route failures to the dead letter queue."""
+    logger.info("Listening with DLQ enabled (failures → '%s')...", dlq_topic)
+    for message in consumer:
+        try:
+            process_message(message.value)
+        except Exception as exc:
+            logger.warning(
+                "Processing failed [partition %d | offset %d] — routing to DLQ: %s",
+                message.partition,
+                message.offset,
+                exc,
+            )
+            dlq_producer.send(
+                dlq_topic,
+                value={
+                    "original_topic": message.topic,
+                    "original_partition": message.partition,
+                    "original_offset": message.offset,
+                    "payload": message.value,
+                    "error": str(exc),
+                },
+            )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kafka consumer")
     parser.add_argument(
@@ -77,13 +113,30 @@ if __name__ == "__main__":
         metavar="OFFSET",
         help="Seek all partitions to this offset before consuming",
     )
+    parser.add_argument(
+        "--dlq",
+        action="store_true",
+        help="Enable dead letter queue — route failed messages to demo-topic-dlq",
+    )
     args = parser.parse_args()
 
     logger.info("Starting consumer in group '%s'", args.group)
     consumer = create_consumer(group_id=args.group)
     try:
         apply_seek(consumer, from_beginning=args.from_beginning, seek_to=args.seek_to)
-        consume(consumer)
+        if args.dlq:
+            dlq_producer = KafkaProducer(
+                bootstrap_servers=KAFKA_BROKER,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                api_version=(2, 5, 0),
+            )
+            try:
+                consume_with_dlq(consumer, dlq_producer)
+            finally:
+                dlq_producer.flush()
+                dlq_producer.close()
+        else:
+            consume(consumer)
     except KeyboardInterrupt:
         logger.info("Shutting down consumer.")
     finally:
