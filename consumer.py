@@ -2,6 +2,7 @@ from kafka import KafkaConsumer
 import argparse
 import json
 import logging
+from typing import Callable, Optional
 
 from config import KAFKA_BROKER, TOPIC, GROUP_ID
 
@@ -13,15 +14,17 @@ def create_consumer(
     topic: str = TOPIC,
     broker: str = KAFKA_BROKER,
     group_id: str = GROUP_ID,
+    on_assign: Optional[Callable] = None,
 ) -> KafkaConsumer:
-    return KafkaConsumer(
-        topic,
+    consumer = KafkaConsumer(
         bootstrap_servers=broker,
         group_id=group_id,
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         api_version=(2, 5, 0),  # Fixes "Invalid file descriptor: -1" on Windows
     )
+    consumer.subscribe([topic], on_assign=on_assign)
+    return consumer
 
 
 def consume(consumer: KafkaConsumer) -> None:
@@ -40,10 +43,33 @@ if __name__ == "__main__":
     parser.add_argument(
         "--group", default=GROUP_ID, help="Consumer group ID (default: %(default)s)"
     )
+    parser.add_argument(
+        "--from-beginning",
+        action="store_true",
+        help="Ignore committed offsets and replay all messages from offset 0",
+    )
+    parser.add_argument(
+        "--seek-to",
+        type=int,
+        default=None,
+        metavar="OFFSET",
+        help="Seek all partitions to this offset before consuming",
+    )
     args = parser.parse_args()
 
+    def on_assign(consumer, partitions):
+        if args.from_beginning:
+            logger.info("Seeking to beginning on %d partition(s)", len(partitions))
+            consumer.seek_to_beginning(*partitions)
+        elif args.seek_to is not None:
+            logger.info(
+                "Seeking to offset %d on %d partition(s)", args.seek_to, len(partitions)
+            )
+            for tp in partitions:
+                consumer.seek(tp, args.seek_to)
+
     logger.info("Starting consumer in group '%s'", args.group)
-    consumer = create_consumer(group_id=args.group)
+    consumer = create_consumer(group_id=args.group, on_assign=on_assign)
     try:
         consume(consumer)
     except KeyboardInterrupt:
